@@ -31,7 +31,7 @@ local_roles = {
 
 authorized_google_users = {
     # اضف هنا ايميلات المستخدمين المسموح لها وصلاحياتهم
-    # "user@example.com": "admin",
+     "gghuuajjajnn@gmail.com": "admin",
     # "student@example.com": "student"
 }
 

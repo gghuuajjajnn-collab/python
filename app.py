@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 # متغيرات المصادقة
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 AUTH_SECRET = os.environ.get("AUTH_SECRET")
 if not AUTH_SECRET:
@@ -148,67 +149,110 @@ def ask_ai():
         if not user_query:
             return jsonify({"response": "الرجاء إدخال سؤال صحيح."}), 400
 
-        if not GEMINI_API_KEY or GEMINI_API_KEY.startswith("YOUR_"):
-            logger.error("Missing Gemini API key")
-            return jsonify({"response": "مفتاح الذكاء الاصطناعي غير مضبوط. اضبط GEMINI_API_KEY ثم أعد تشغيل الخادم."}), 500
-
         logger.info(f"AI query received from {auth_user['email']}: {user_query[:50]}...")
 
-        # إصلاح: استخدام API v1beta مع gemini-1.5-flash (أو gemini-2.0-flash)
-        # ملاحظة: gemini-2.5-flash قد لا يكون متاحاً للجميع، نستخدم 1.5-flash كبديل آمن
-        model_name = "gemini-1.5-flash"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        
-        payload = {
-            "contents": [{
-                "parts": [{
-                    "text": f"أنت مساعد برمجي خبير في موقع 'مستودع الأكواد'. أجب باللغة العربية الفصحى، واكتب الأكواد البرمجية داخل بلوكات نصية واضحة (باستخدام ```)، وكن مختصراً ومفيداً. السؤال: {user_query}"
-                }]
-            }],
-            "generationConfig": {
-                "temperature": 0.7,
-                "maxOutputTokens": 2048
-            }
-        }
+        # محاولة Groq أولاً (أفضل ومجاني)
+        if GROQ_API_KEY and not GROQ_API_KEY.startswith("YOUR_"):
+            try:
+                return ask_groq(user_query)
+            except Exception as e:
+                logger.warning(f"Groq failed, trying Gemini: {e}")
 
-        response = requests.post(url, json=payload, timeout=40)
-        response.raise_for_status()
+        # Fallback لـ Gemini
+        if GEMINI_API_KEY and not GEMINI_API_KEY.startswith("YOUR_"):
+            try:
+                return ask_gemini(user_query)
+            except Exception as e:
+                logger.error(f"Gemini also failed: {e}")
 
-        data = response.json()
-        ai_text = ""
+        return jsonify({
+            "response": "مفتاح الذكاء الاصطناعي غير مضبوط.\n\n💡 الحلول:\n1. احصل على مفتاح Groq مجاني من https://console.groq.com\n2. أو اضبط GEMINI_API_KEY\n3. أعد تشغيل الخادم"
+        }), 500
 
-        # استخراج النص من الرد الجديد
-        if isinstance(data, dict) and 'candidates' in data and data['candidates']:
-            candidate = data['candidates'][0]
-            if 'content' in candidate and 'parts' in candidate['content']:
-                parts = candidate['content']['parts']
-                ai_text = ''.join([part.get('text', '') for part in parts])
-            elif 'output' in candidate:
-                ai_text = candidate['output']
-
-        if not ai_text:
-            ai_text = "عذراً، لم أتمكن من معالجة الرد حالياً. حاول صياغة السؤال بشكل آخر."
-
-        logger.info("AI response generated successfully")
-        return jsonify({"response": ai_text})
-
-    except requests.exceptions.Timeout:
-        logger.error("AI request timeout")
-        return jsonify({"response": "استغرق الذكاء الاصطناعي وقتاً طويلاً، حاول مرة أخرى."}), 504
-    except requests.exceptions.HTTPError as http_err:
-        logger.error(f"AI HTTP error: {http_err}")
-        if 'response' in locals():
-            logger.error(f"Response text: {response.text}")
-        return jsonify({"response": "خطأ في خدمة الذكاء الاصطناعي. تأكد من مفتاح الـ API وإعدادات الشبكة."}), 502
     except Exception as e:
         logger.error(f"AI error: {e}")
-        return jsonify({"response": "حدث خطأ أثناء الاتصال بالعقل الاصطناعي، تأكد من مفتاح الـ API."}), 500
+        return jsonify({"response": "حدث خطأ غير متوقع."}), 500
+
+
+def ask_groq(query):
+    """استخدام Groq API (مجاني وسريع)"""
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {
+                "role": "system",
+                "content": "أنت مساعد برمجي خبير ومعلم للطلاب. أجب باللغة العربية الفصحى. اكتب الأكواد داخل علامات markdown. كن مفصلاً في الشرح ومختصراً في الكود."
+            },
+            {
+                "role": "user",
+                "content": query
+            }
+        ],
+        "temperature": 0.7,
+        "max_tokens": 2048
+    }
+    
+    response = requests.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json=payload,
+        timeout=60
+    )
+    response.raise_for_status()
+    
+    data = response.json()
+    ai_text = data['choices'][0]['message']['content']
+    
+    logger.info("Groq AI response generated successfully")
+    return jsonify({"response": ai_text})
+
+
+def ask_gemini(query):
+    """استخدام Gemini API كـ fallback"""
+    model_name = "gemini-1.5-flash"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+    
+    payload = {
+        "contents": [{
+            "parts": [{
+                "text": f"أنت مساعد برمجي خبير في موقع 'مستودع الأكواد'. أجب باللغة العربية الفصحى، واكتب الأكواد البرمجية داخل بلوكات نصية واضحة (باستخدام ```)، وكن مختصراً ومفيداً: {query}"
+            }]
+        }],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 2048
+        }
+    }
+
+    response = requests.post(url, json=payload, timeout=40)
+    response.raise_for_status()
+
+    data = response.json()
+    ai_text = ""
+
+    if isinstance(data, dict) and 'candidates' in data and data['candidates']:
+        candidate = data['candidates'][0]
+        if 'content' in candidate and 'parts' in candidate['content']:
+            parts = candidate['content']['parts']
+            ai_text = ''.join([part.get('text', '') for part in parts])
+
+    if not ai_text:
+        ai_text = "عذراً، لم أتمكن من معالجة الرد."
+
+    logger.info("Gemini AI response generated successfully")
+    return jsonify({"response": ai_text})
 
 @app.route('/status', methods=['GET'])
 def status():
     return jsonify({
         "status": "ok", 
         "message": "Python server running",
+        "groq_configured": bool(GROQ_API_KEY and not GROQ_API_KEY.startswith("YOUR_")),
         "gemini_configured": bool(GEMINI_API_KEY and not GEMINI_API_KEY.startswith("YOUR_"))
     })
 

@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # متغيرات المصادقة
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyDIERB7bPel-OTMxQxSE8ELX9diJ4kD16c")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 AUTH_SECRET = os.environ.get("AUTH_SECRET")
 if not AUTH_SECRET:
@@ -30,9 +30,7 @@ local_roles = {
 }
 
 authorized_google_users = {
-    # اضف هنا ايميلات المستخدمين المسموح لها وصلاحياتهم
-     "gghuuajjajnn@gmail.com": "admin",
-    # "student@example.com": "student"
+    "gghuuajjajnn@gmail.com": "admin",
 }
 
 serializer = URLSafeTimedSerializer(AUTH_SECRET)
@@ -156,10 +154,20 @@ def ask_ai():
 
         logger.info(f"AI query received from {auth_user['email']}: {user_query[:50]}...")
 
-        url = f"https://generativelanguage.googleapis.com/v1beta2/models/gemini-2.5-flash:generateText?key={GEMINI_API_KEY}"
+        # إصلاح: استخدام API v1beta مع gemini-1.5-flash (أو gemini-2.0-flash)
+        # ملاحظة: gemini-2.5-flash قد لا يكون متاحاً للجميع، نستخدم 1.5-flash كبديل آمن
+        model_name = "gemini-1.5-flash"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        
         payload = {
-            "prompt": {
-                "text": f"أنت مساعد برمجي خبير في موقع 'مستودع الأكواد'. أجب باللغة العربية الفصحى، واكتب الأكواد البرمجية داخل بلوكات نصية واضحة، وكن مختصراً ومفيداً: {user_query}"
+            "contents": [{
+                "parts": [{
+                    "text": f"أنت مساعد برمجي خبير في موقع 'مستودع الأكواد'. أجب باللغة العربية الفصحى، واكتب الأكواد البرمجية داخل بلوكات نصية واضحة (باستخدام ```)، وكن مختصراً ومفيداً. السؤال: {user_query}"
+                }]
+            }],
+            "generationConfig": {
+                "temperature": 0.7,
+                "maxOutputTokens": 2048
             }
         }
 
@@ -169,9 +177,14 @@ def ask_ai():
         data = response.json()
         ai_text = ""
 
+        # استخراج النص من الرد الجديد
         if isinstance(data, dict) and 'candidates' in data and data['candidates']:
             candidate = data['candidates'][0]
-            ai_text = candidate.get('output') or (candidate.get('content', [{}])[0].get('text') if isinstance(candidate.get('content'), list) else '')
+            if 'content' in candidate and 'parts' in candidate['content']:
+                parts = candidate['content']['parts']
+                ai_text = ''.join([part.get('text', '') for part in parts])
+            elif 'output' in candidate:
+                ai_text = candidate['output']
 
         if not ai_text:
             ai_text = "عذراً، لم أتمكن من معالجة الرد حالياً. حاول صياغة السؤال بشكل آخر."
@@ -183,15 +196,21 @@ def ask_ai():
         logger.error("AI request timeout")
         return jsonify({"response": "استغرق الذكاء الاصطناعي وقتاً طويلاً، حاول مرة أخرى."}), 504
     except requests.exceptions.HTTPError as http_err:
-        logger.error(f"AI HTTP error: {http_err} - {response.text}")
-        return jsonify({"response": "خطأ في خدمة الذكاء الاصطناعي. تأكد من مفتاح الـ API وإعدادات الشبكة."}), response.status_code
+        logger.error(f"AI HTTP error: {http_err}")
+        if 'response' in locals():
+            logger.error(f"Response text: {response.text}")
+        return jsonify({"response": "خطأ في خدمة الذكاء الاصطناعي. تأكد من مفتاح الـ API وإعدادات الشبكة."}), 502
     except Exception as e:
         logger.error(f"AI error: {e}")
         return jsonify({"response": "حدث خطأ أثناء الاتصال بالعقل الاصطناعي، تأكد من مفتاح الـ API."}), 500
 
 @app.route('/status', methods=['GET'])
 def status():
-    return jsonify({"status": "ok", "message": "Python server running"})
+    return jsonify({
+        "status": "ok", 
+        "message": "Python server running",
+        "gemini_configured": bool(GEMINI_API_KEY and not GEMINI_API_KEY.startswith("YOUR_"))
+    })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

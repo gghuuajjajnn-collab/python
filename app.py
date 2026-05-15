@@ -39,6 +39,21 @@ authorized_google_users = {
 serializer = URLSafeTimedSerializer(AUTH_SECRET)
 
 # ... (دوال المصادقة نفسها)
+def authenticate_request():
+    auth_header = request.headers.get("Authorization")
+
+    if not auth_header:
+        return None
+
+    try:
+        token = auth_header.split(" ")[1]
+
+        # هنا فقط نرجع التوكن مؤقتاً
+        return {"token": token}
+
+    except Exception as e:
+        logger.error(f"Auth Error: {e}")
+        return None
 
 @app.route('/ask-ai', methods=['POST'])
 def ask_ai():
